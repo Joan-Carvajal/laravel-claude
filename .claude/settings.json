@@ -66,9 +66,7 @@
             }
         ]
     },
-    "worktree": [
-        {
-            "baseRef": "head"
-        }
-    ]
+    "worktree": {
+        "baseRef": "head"
+      }
 }

@@ -1,0 +1,99 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  phpVersion: '8.4'
+  COMPOSER_CACHE_DIR: $(Pipeline.Workspace)/.composer-cache
+  npm_config_cache: $(Pipeline.Workspace)/.npm-cache
+
+jobs:
+  - job: quality
+    displayName: 'Quality checks'
+    timeoutInMinutes: 20
+    steps:
+      - script: |
+          if [ ! -x /usr/bin/php$(phpVersion) ]; then
+            sudo add-apt-repository -y ppa:ondrej/php
+            sudo apt-get update
+            sudo apt-get install -y php$(phpVersion)-cli php$(phpVersion)-mbstring php$(phpVersion)-xml \
+              php$(phpVersion)-curl php$(phpVersion)-zip php$(phpVersion)-sqlite3 php$(phpVersion)-bcmath php$(phpVersion)-intl
+          fi
+          sudo update-alternatives --set php /usr/bin/php$(phpVersion)
+          sudo update-alternatives --set phar /usr/bin/phar$(phpVersion)
+          sudo update-alternatives --set phpdbg /usr/bin/phpdbg$(phpVersion)
+          sudo update-alternatives --set php-cgi /usr/bin/php-cgi$(phpVersion)
+          sudo update-alternatives --set phar.phar /usr/bin/phar.phar$(phpVersion)
+          php -version
+        displayName: 'Use PHP $(phpVersion)'
+
+      - task: Cache@2
+        displayName: 'Cache Composer packages'
+        inputs:
+          key: 'composer | "$(Agent.OS)" | "$(phpVersion)" | composer.lock'
+          restoreKeys: |
+            composer | "$(Agent.OS)" | "$(phpVersion)"
+          path: $(COMPOSER_CACHE_DIR)
+
+      - script: composer install --no-interaction --prefer-dist --no-progress
+        displayName: 'composer install'
+
+      - script: |
+          cp .env.example .env
+          php artisan key:generate --ansi
+        displayName: 'Prepare environment'
+
+      - script: ./vendor/bin/rector --dry-run --no-progress-bar
+        displayName: 'Rector (dry run)'
+
+      - script: ./vendor/bin/pint --test
+        displayName: 'Pint (code style)'
+
+      - script: ./vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+        displayName: 'PHPStan'
+
+      - script: |
+          php artisan config:clear --ansi
+          ./vendor/bin/pest --ci --log-junit $(Build.ArtifactStagingDirectory)/junit.xml
+        displayName: 'Pest tests'
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ':memory:'
+
+      - task: PublishTestResults@2
+        displayName: 'Publish test results'
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: '$(Build.ArtifactStagingDirectory)/junit.xml'
+          failTaskOnFailedTests: true
+
+  - job: frontend
+    displayName: 'Frontend build'
+    timeoutInMinutes: 10
+    steps:
+      - task: NodeTool@0
+        displayName: 'Use Node 22'
+        inputs:
+          versionSpec: '22.x'
+
+      - task: Cache@2
+        displayName: 'Cache npm packages'
+        inputs:
+          key: 'npm | "$(Agent.OS)" | package.json'
+          path: $(npm_config_cache)
+
+      - script: npm install --no-audit --no-fund
+        displayName: 'npm install'
+
+      - script: npm run build
+        displayName: 'Vite build'

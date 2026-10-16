@@ -14,7 +14,7 @@ final class CreateTaskAction
      */
     public function handle(CreateTaskData $data): Task
     {
-        $task = Task::create([
+        $task = Task::query()->create([
             'title' => $data->title,
             'description' => $data->description,
         ]);
